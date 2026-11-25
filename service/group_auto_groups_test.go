@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -69,4 +70,45 @@ func TestGetRequestAutoGroupsDoesNotFallBackAfterPermissionChange(t *testing.T) 
 	groups := GetRequestAutoGroups(ctx, "default")
 
 	assert.Empty(t, groups)
+}
+
+func TestGetRequesterModelGroupRatio(t *testing.T) {
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"group_ratio_setting.group_ratio":            `{"default":1,"vip":2,"svip":3}`,
+		"group_ratio_setting.group_group_ratio":      `{"employee":{"vip":1.5}}`,
+		"group_ratio_setting.group_model_ratio":      `{"vip":{"gpt-4":0.8,"*":0.9}}`,
+		"group_ratio_setting.user_group_model_ratio": `{}`,
+		"group_ratio_setting.user_model_ratio":       `{"7":{"gpt-4":0.25},"9":{"*":0.05}}`,
+	}))
+	usableGroup := map[string]string{"default": "Default", "vip": "VIP"}
+
+	t.Run("only the requester own rules are returned", func(t *testing.T) {
+		assert.Equal(t, map[string]map[string]float64{
+			"default": {"gpt-4": 0.25},
+			"vip":     {"*": 0.9, "gpt-4": 0.25},
+		}, GetRequesterModelGroupRatio(7, "member", usableGroup))
+	})
+
+	t.Run("the group ratio is the comparison base", func(t *testing.T) {
+		assert.Equal(t, map[string]map[string]float64{
+			"vip": {"*": 0.9, "gpt-4": 0.8},
+		}, GetRequesterModelGroupRatio(8, "employee", usableGroup))
+	})
+
+	t.Run("a user wildcard shadows the group entries like billing does", func(t *testing.T) {
+		assert.Equal(t, map[string]map[string]float64{
+			"default": {"*": 0.05},
+			"vip":     {"*": 0.05, "gpt-4": 0.05},
+		}, GetRequesterModelGroupRatio(9, "member", usableGroup))
+	})
+
+	t.Run("entries equal to the base ratio are omitted", func(t *testing.T) {
+		assert.Empty(t, GetRequesterModelGroupRatio(8, "member", map[string]string{"default": "Default"}))
+	})
 }

@@ -79,7 +79,11 @@ import {
   type DynamicPriceEntry,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
+import {
+  getAvailableGroups,
+  getModelEffectiveGroupRatio,
+  isTokenBasedModel,
+} from '../lib/model-helpers'
 import {
   withBasePricing,
   withOrdinaryPricing,
@@ -1203,7 +1207,11 @@ function ProviderGroupPricingSection(
     })
     const formattedPricesByGroup = new Map(
       availableGroups.map((group) => {
-        const ratio = props.groupRatio[group] || 1
+        const ratio = getModelEffectiveGroupRatio(
+          props.model,
+          group,
+          props.groupRatio
+        )
         return [
           group,
           getDynamicFormattedPricesByTier(dynamicTiers, {
@@ -1227,7 +1235,11 @@ function ProviderGroupPricingSection(
         <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
         <div className='space-y-3'>
           {availableGroups.map((group) => {
-            const ratio = props.groupRatio[group] || 1
+            const ratio = getModelEffectiveGroupRatio(
+              props.model,
+              group,
+              props.groupRatio
+            )
             const formattedPricesByTier =
               formattedPricesByGroup.get(group) ??
               new Map<DynamicPricingTier, Map<string, string>>()
@@ -1433,7 +1445,8 @@ function ProviderGroupPricingSection(
             header: t('Ratio'),
             className: thClass,
             cellClassName: 'text-muted-foreground py-2.5 font-mono',
-            cell: (group) => `${props.groupRatio[group] || 1}x`,
+            cell: (group) =>
+              `${getModelEffectiveGroupRatio(props.model, group, props.groupRatio)}x`,
           },
           ...(isTokenBased
             ? [

@@ -802,3 +802,168 @@ func (s *priceTestReservation) GetPreConsumedQuota() int { return s.held }
 func (s *priceTestReservation) Reserve(quota int) error  { s.held = max(s.held, quota); return nil }
 
 func (s *priceTestReservation) ReserveBeforeSubmit(quota int) error { return s.Reserve(quota) }
+
+// saveGroupRatioOptions snapshots every group_ratio_setting row so a test can
+// install its own override tables and leave the process state as it was found.
+func saveGroupRatioOptions(t *testing.T) {
+	t.Helper()
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+}
+
+func TestHandleGroupRatioModelLevelOverrides(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	saveGroupRatioOptions(t)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"group_ratio_setting.group_ratio":            `{"default":2,"vip":4}`,
+		"group_ratio_setting.group_group_ratio":      `{"employee":{"default":1.5}}`,
+		"group_ratio_setting.group_model_ratio":      `{"vip":{"gpt-4":0.8,"*":0.9}}`,
+		"group_ratio_setting.user_group_model_ratio": `{"employee":{"gpt-4":0.6}}`,
+		"group_ratio_setting.user_model_ratio":       `{"7":{"gpt-4":0.25}}`,
+	}))
+
+	for _, tc := range []struct {
+		name        string
+		userId      int
+		userGroup   string
+		usingGroup  string
+		model       string
+		want        float64
+		wantSource  string
+		wantSpecial bool
+	}{
+		{"user rule wins", 7, "employee", "vip", "gpt-4", 0.25, ratio_setting.ModelRatioSourceUser, true},
+		{"user group rule wins over using group", 8, "employee", "vip", "gpt-4", 0.6, ratio_setting.ModelRatioSourceUserGr, true},
+		{"using group rule is the last model level", 8, "member", "vip", "gpt-4", 0.8, ratio_setting.ModelRatioSourceGroup, true},
+		{"using group wildcard covers unlisted models", 8, "member", "vip", "claude", 0.9, ratio_setting.ModelRatioSourceGroup, true},
+		{"inter group ratio when no model rule matches", 8, "employee", "default", "claude", 1.5, "", true},
+		{"plain group ratio as the last level", 8, "member", "default", "claude", 2, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{UserId: tc.userId, UserGroup: tc.userGroup, UsingGroup: tc.usingGroup, OriginModelName: tc.model}
+			got := HandleGroupRatio(ctx, info)
+			assert.InDelta(t, tc.want, got.GroupRatio, 1e-9)
+			assert.Equal(t, tc.wantSource, got.ModelRatioSource)
+			assert.Equal(t, tc.wantSpecial, got.HasSpecialRatio)
+			if tc.wantSpecial {
+				assert.InDelta(t, tc.want, got.GroupSpecialRatio, 1e-9)
+			}
+		})
+	}
+
+	t.Run("auto group is resolved before the model rules", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Set("auto_group", "vip")
+		info := &relaycommon.RelayInfo{UserId: 8, UserGroup: "member", UsingGroup: "default", OriginModelName: "gpt-4"}
+		got := HandleGroupRatio(ctx, info)
+		assert.InDelta(t, 0.8, got.GroupRatio, 1e-9)
+		assert.Equal(t, ratio_setting.ModelRatioSourceGroup, got.ModelRatioSource)
+		assert.Equal(t, "vip", info.UsingGroup)
+	})
+}
+
+func TestModelPriceHelperUsesModelGroupRatioOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	saveGroupRatioOptions(t)
+	previousRatios := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios)) })
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"ratio-model":0.5,"suffix-model":0.5,"free-model":0.5,"tiered-model":0.5}`))
+	previousMultiplier := operation_setting.GetQuotaSetting().PreConsumeMultiplier
+	previousFreePreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
+	t.Cleanup(func() {
+		operation_setting.GetQuotaSetting().PreConsumeMultiplier = previousMultiplier
+		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = previousFreePreConsume
+	})
+	operation_setting.GetQuotaSetting().PreConsumeMultiplier = 1
+	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"group_ratio_setting.group_ratio":      `{"default":2}`,
+		"group_ratio_setting.user_model_ratio": `{"7":{"ratio-model":0.25,"free-model":0,"suffix-model":0.125,"tiered-model":0.25}}`,
+		"billing_setting.billing_mode":         `{"tiered-model":"tiered_expr"}`,
+		"billing_setting.billing_expr":         `{"tiered-model":"tier(\"base\", p * 0.5)"}`,
+	}))
+
+	newInfo := func(userId int, model string) *relaycommon.RelayInfo {
+		return &relaycommon.RelayInfo{UserId: userId, OriginModelName: model, UserGroup: "default", UsingGroup: "default", BillingRequestInput: &billingexpr.RequestInput{}}
+	}
+
+	t.Run("override replaces the group ratio in the pre-consume", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		price, err := ModelPriceHelper(ctx, newInfo(7, "ratio-model"), 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		assert.InDelta(t, 0.25, price.GroupRatioInfo.GroupRatio, 1e-9)
+		assert.Equal(t, ratio_setting.ModelRatioSourceUser, price.GroupRatioInfo.ModelRatioSource)
+		assert.Equal(t, 125, price.QuotaToPreConsume, "1000 tokens * 0.5 model ratio * 0.25 effective group ratio")
+	})
+
+	t.Run("another customer keeps the group ratio", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		price, err := ModelPriceHelper(ctx, newInfo(8, "ratio-model"), 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		assert.InDelta(t, 2, price.GroupRatioInfo.GroupRatio, 1e-9)
+		assert.Empty(t, price.GroupRatioInfo.ModelRatioSource)
+		assert.Equal(t, 1000, price.QuotaToPreConsume)
+	})
+
+	t.Run("a model name with modifiers matches the billing model name", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		info := newInfo(7, "suffix-model@thinking:off")
+		price, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		assert.Equal(t, "suffix-model", info.GetBillingModelName())
+		assert.InDelta(t, 0.125, price.GroupRatioInfo.GroupRatio, 1e-9)
+		assert.Equal(t, 62, price.QuotaToPreConsume, "1000 * 0.5 * 0.125 rounded down by the quota conversion")
+	})
+
+	t.Run("a zero override makes the model free to pre-consume", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		price, err := ModelPriceHelper(ctx, newInfo(7, "free-model"), 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		assert.Zero(t, price.GroupRatioInfo.GroupRatio)
+		assert.Equal(t, ratio_setting.ModelRatioSourceUser, price.GroupRatioInfo.ModelRatioSource)
+		assert.Zero(t, price.QuotaToPreConsume)
+		assert.True(t, price.FreeModel)
+	})
+
+	t.Run("the tiered snapshot freezes the override", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		info := newInfo(7, "tiered-model")
+		price, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+		require.NoError(t, err)
+		require.NotNil(t, info.TieredBillingSnapshot)
+		assert.InDelta(t, 0.25, info.TieredBillingSnapshot.GroupRatio, 1e-9)
+		assert.Equal(t, ratio_setting.ModelRatioSourceUser, price.GroupRatioInfo.ModelRatioSource)
+	})
+}
+
+func TestModelPriceHelperPerCallUsesModelGroupRatioOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	saveGroupRatioOptions(t)
+	previousPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousPrices)) })
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"task-model":0.02}`))
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"group_ratio_setting.group_ratio":       `{"default":2}`,
+		"group_ratio_setting.group_model_ratio": `{"default":{"task-model":0.25}}`,
+	}))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/tasks", nil)
+	info := &relaycommon.RelayInfo{UserId: 7, OriginModelName: "task-model", UserGroup: "default", UsingGroup: "default"}
+	price, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.25, price.GroupRatioInfo.GroupRatio, 1e-9)
+	assert.Equal(t, ratio_setting.ModelRatioSourceGroup, price.GroupRatioInfo.ModelRatioSource)
+	assert.Equal(t, common.QuotaPerUnit*0.02*0.25, float64(price.Quota))
+}

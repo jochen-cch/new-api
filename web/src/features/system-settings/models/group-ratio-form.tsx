@@ -70,6 +70,9 @@ type GroupFormValues = {
   TopupGroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string
+  UserModelRatio: string
+  UserGroupModelRatio: string
+  GroupModelRatio: string
   AutoGroups: string
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
@@ -80,12 +83,14 @@ type GroupRatioFormProps = {
   form: UseFormReturn<GroupFormValues>
   onSave: (values: GroupFormValues) => Promise<void>
   isSaving: boolean
+  modelOptions?: string[]
 }
 
 export const GroupRatioForm = memo(function GroupRatioForm({
   form,
   onSave,
   isSaving,
+  modelOptions,
 }: GroupRatioFormProps) {
   const { t } = useTranslation()
   const values = useWatch({ control: form.control })
@@ -171,6 +176,10 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             topupGroupRatio={values.TopupGroupRatio ?? ''}
             userUsableGroups={values.UserUsableGroups ?? ''}
             groupGroupRatio={values.GroupGroupRatio ?? ''}
+            userModelRatio={values.UserModelRatio ?? ''}
+            userGroupModelRatio={values.UserGroupModelRatio ?? ''}
+            groupModelRatio={values.GroupModelRatio ?? ''}
+            modelOptions={modelOptions ?? []}
             autoGroups={values.AutoGroups ?? ''}
             maxTokenAutoGroupsField={
               <FormField
@@ -329,6 +338,86 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                     {`{ targetGroup: ratio }`}{' '}
                     {t(
                       'to override billing when a user in one group uses a token of another group.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='UserModelRatio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Customer model ratios')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Nested JSON:')} {`{ "<user id>": { "<model>": 0.8 } }`}{' '}
+                    {t(
+                      'Highest priority override; "*" matches every model and 0 makes the model free.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='UserGroupModelRatio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Customer group model ratios')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Nested JSON:')}{' '}
+                    {`{ "<user group>": { "<model>": 0.8 } }`}{' '}
+                    {t(
+                      'Applies to every customer in the user group when no customer rule matches.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupModelRatio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Billing group model ratios')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Nested JSON:')}{' '}
+                    {`{ "<billing group>": { "<model>": 0.8 } }`}{' '}
+                    {t(
+                      'Lowest priority override, applied before the group ratio itself.'
                     )}
                   </FormDescription>
                   <FormMessage />

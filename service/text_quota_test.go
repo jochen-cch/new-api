@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -1704,4 +1705,66 @@ func TestPostTextConsumeQuotaLogsMissingUsageAsStructuredContent(t *testing.T) {
 	assert.Equal(t, []any{
 		map[string]any{"key": "Upstream returned no usage, so nothing was charged (possibly an upstream timeout)"},
 	}, other["content_parts"])
+}
+
+// modelRatioSourcePriceData is the billing state a model level group ratio override
+// leaves behind: the override replaces the group ratio and names its source.
+func modelRatioSourcePriceData(source string) hosttypes.PriceData {
+	groupRatioInfo := hosttypes.GroupRatioInfo{GroupRatio: 1, GroupSpecialRatio: -1}
+	if source != "" {
+		groupRatioInfo = hosttypes.GroupRatioInfo{GroupRatio: 0.25, GroupSpecialRatio: 0.25, HasSpecialRatio: true, ModelRatioSource: source}
+	}
+	return hosttypes.PriceData{ModelRatio: 1, CompletionRatio: 1, GroupRatioInfo: groupRatioInfo}
+}
+
+func TestGenerateTextOtherInfoRecordsModelRatioSource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:            1,
+		OriginModelName:   "override-model",
+		UsingGroup:        "default",
+		StartTime:         time.Now(),
+		FirstResponseTime: time.Now(),
+		ChannelMeta:       &relaycommon.ChannelMeta{ChannelId: 1},
+		PriceData:         modelRatioSourcePriceData(ratio_setting.ModelRatioSourceUser),
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 0.25, 1, 0, 1, 0, 0.25)
+	snapshot := other.Snapshot()
+	assert.InDelta(t, 0.25, snapshot["user_group_ratio"], 1e-9, "the override is the ratio the bill shows")
+	adminInfo, ok := snapshot["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, ratio_setting.ModelRatioSourceUser, adminInfo["group_model_ratio_source"])
+}
+
+func TestGenerateTextOtherInfoOmitsModelRatioSourceWithoutOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:            1,
+		OriginModelName:   "plain-model",
+		UsingGroup:        "default",
+		StartTime:         time.Now(),
+		FirstResponseTime: time.Now(),
+		ChannelMeta:       &relaycommon.ChannelMeta{ChannelId: 1},
+		PriceData:         modelRatioSourcePriceData(""),
+	}
+
+	snapshot := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 1, 0, -1).Snapshot()
+	if adminInfo, ok := snapshot["admin_info"].(map[string]any); ok {
+		assert.NotContains(t, adminInfo, "group_model_ratio_source")
+	}
+}
+
+func TestGenerateMjOtherInfoRecordsModelRatioSource(t *testing.T) {
+	other := GenerateMjOtherInfo(&relaycommon.RelayInfo{UserId: 1, OriginModelName: "mj-model", UsingGroup: "vip"}, modelRatioSourcePriceData(ratio_setting.ModelRatioSourceGroup))
+	snapshot := other.Snapshot()
+	assert.InDelta(t, 0.25, snapshot["group_ratio"], 1e-9)
+	assert.InDelta(t, 0.25, snapshot["user_group_ratio"], 1e-9)
+	adminInfo, ok := snapshot["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, ratio_setting.ModelRatioSourceGroup, adminInfo["group_model_ratio_source"])
 }

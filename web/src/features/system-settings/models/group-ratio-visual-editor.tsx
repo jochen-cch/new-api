@@ -82,12 +82,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber } from '@/lib/format'
 
-import { safeJsonParse } from '../utils/json-parser'
+import { parseNestedRatioMap, safeJsonParse } from '../utils/json-parser'
+import { GroupModelRatioRulesEditor } from './group-model-ratio-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
 export type GroupSettingsSection =
   | 'pricing'
   | 'overrides'
+  | 'modelratios'
   | 'visibility'
   | 'auto'
 
@@ -99,9 +101,13 @@ type GroupRatioVisualEditorProps = {
   topupGroupRatio: string
   userUsableGroups: string
   groupGroupRatio: string
+  userModelRatio: string
+  userGroupModelRatio: string
+  groupModelRatio: string
   autoGroups: string
   maxTokenAutoGroupsField: ReactNode
   groupSpecialUsableGroup: string
+  modelOptions: string[]
   onChange: (field: string, value: string) => void
 }
 
@@ -142,15 +148,6 @@ function parseRatioMap(value: string): Record<string, number> {
 
 function parseUsableMap(value: string): Record<string, string> {
   return safeJsonParse<Record<string, string>>(value, {
-    fallback: {},
-    silent: true,
-  })
-}
-
-function parseNestedRatioMap(
-  value: string
-): Record<string, Record<string, number>> {
-  return safeJsonParse<Record<string, Record<string, number>>>(value, {
     fallback: {},
     silent: true,
   })
@@ -274,9 +271,13 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   topupGroupRatio,
   userUsableGroups,
   groupGroupRatio,
+  userModelRatio,
+  userGroupModelRatio,
+  groupModelRatio,
   autoGroups,
   maxTokenAutoGroupsField,
   groupSpecialUsableGroup,
+  modelOptions,
   onChange,
 }: GroupRatioVisualEditorProps) {
   const { t, i18n } = useTranslation()
@@ -357,6 +358,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           <TabsTrigger value='overrides' className='px-3'>
             {t('Special ratio rules')}
           </TabsTrigger>
+          <TabsTrigger value='modelratios' className='px-3'>
+            {t('Model ratios')}
+          </TabsTrigger>
           <TabsTrigger value='visibility' className='px-3'>
             {t('Group visibility')}
           </TabsTrigger>
@@ -378,6 +382,16 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
         <GroupOverrideRules
           registry={registry}
           groupGroupRatio={groupGroupRatio}
+          onChange={onChange}
+        />
+      </TabsContent>
+      <TabsContent value='modelratios' keepMounted>
+        <GroupModelRatioRulesEditor
+          userModelRatio={userModelRatio}
+          userGroupModelRatio={userGroupModelRatio}
+          groupModelRatio={groupModelRatio}
+          groupOptions={registryNames}
+          modelOptions={modelOptions}
           onChange={onChange}
         />
       </TabsContent>

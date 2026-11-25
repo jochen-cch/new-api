@@ -12,6 +12,8 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -370,6 +372,57 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
 	assert.Equal(t, 0.20, relayInfo.TieredBillingSnapshot.GroupRatio)
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
+// TestPrepareTieredBillingForSelectedGroupUsesModelOverride covers the cross group
+// retry: the retry re-resolves the ratio for the selected group, so the frozen
+// snapshot must follow the model level override instead of the plain group ratio.
+func TestPrepareTieredBillingForSelectedGroupUsesModelOverride(t *testing.T) {
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"group_ratio_setting.group_ratio":            `{"vip":2}`,
+		"group_ratio_setting.group_group_ratio":      `{}`,
+		"group_ratio_setting.user_group_model_ratio": `{}`,
+		"group_ratio_setting.group_model_ratio":      `{"vip":{"override-model":0.25}}`,
+		"group_ratio_setting.user_model_ratio":       `{}`,
+	}))
+
+	const expr = `tier("base", p)`
+	billing := &recordingBillingSettler{preConsumedQuota: 50_000}
+	relayInfo := &relaycommon.RelayInfo{
+		Billing:               billing,
+		FinalPreConsumedQuota: 50_000,
+		UserId:                7,
+		UserGroup:             "member",
+		UsingGroup:            "vip",
+		OriginModelName:       "override-model",
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                2,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  1_000_000,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+	}
+	relayInfo.PriceData.GroupRatioInfo = ratio_setting.ResolveGroupRatio(ratio_setting.GroupRatioInput{
+		UserId:     relayInfo.UserId,
+		UserGroup:  relayInfo.UserGroup,
+		UsingGroup: relayInfo.UsingGroup,
+		Model:      relayInfo.GetBillingModelName(),
+	})
+	require.Equal(t, ratio_setting.ModelRatioSourceGroup, relayInfo.PriceData.GroupRatioInfo.ModelRatioSource)
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	assert.InDelta(t, 0.25, relayInfo.TieredBillingSnapshot.GroupRatio, 1e-9)
+	assert.Equal(t, 125_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	assert.Equal(t, []int{125_000}, billing.reserveTargets, "a cheaper override must not raise the reservation")
 }
 
 func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *testing.T) {

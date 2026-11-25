@@ -36,6 +36,7 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 }
 
 func GetPricing(c *gin.Context) {
+	userId := common.GetContextKeyInt(c, constant.ContextKeyUserId)
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	usableGroup := service.GetUserUsableGroups(userGroup)
 	pricing := filterPricingByUsableGroups(model.GetPricing(), usableGroup)
@@ -57,6 +58,7 @@ func GetPricing(c *gin.Context) {
 		"data":               pricing,
 		"vendors":            model.GetVendors(),
 		"group_ratio":        groupRatio,
+		"model_group_ratio":  service.GetRequesterModelGroupRatio(userId, userGroup, usableGroup),
 		"usable_group":       usableGroup,
 		"supported_endpoint": model.GetSupportedEndpointMap(),
 		"auto_groups":        service.GetUserAutoGroup(userGroup),

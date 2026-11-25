@@ -100,6 +100,16 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	}
 }
 
+// appendGroupModelRatioSource records which model level override table produced
+// the effective group ratio. The rules disclose per customer discounts, so the
+// source is stored under admin_info and stripped for non admin log viewers.
+func appendGroupModelRatioSource(groupRatioInfo hosttypes.GroupRatioInfo, other *model.LogOther) {
+	if other == nil || groupRatioInfo.ModelRatioSource == "" {
+		return
+	}
+	other.SetAdmin("group_model_ratio_source", groupRatioInfo.ModelRatioSource)
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) *model.LogOther {
 	MarkRequestPolicySuccess(ctx, relayInfo.StreamStatus)
@@ -126,6 +136,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendRelayLogAdminInfo(ctx, relayInfo, other)
+	appendGroupModelRatioSource(relayInfo.PriceData.GroupRatioInfo, other)
 	AppendResponseModelLogInfo(relayInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
@@ -339,6 +350,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
 	}
+	appendGroupModelRatioSource(priceData.GroupRatioInfo, other)
 	appendRequestPath(nil, relayInfo, other)
 	appendRequestPluginRecord(relayInfo, other)
 	return other

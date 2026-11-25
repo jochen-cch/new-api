@@ -81,6 +81,11 @@ export type PricingModel = {
   supported_endpoint_types?: string[]
   key?: string
   group_ratio?: Record<string, number>
+  /**
+   * Group ratio overrides the backend resolved for the current viewer, keyed by
+   * group then model name; "*" is the per-group wildcard fallback.
+   */
+  model_group_ratio?: Record<string, Record<string, number>>
   /** Billing mode (e.g. "tiered_expr") used to flag dynamic pricing */
   billing_mode?: string
   /** Raw expression describing dynamic / tiered billing */
@@ -129,6 +134,8 @@ export type PricingData = {
   data: PricingModel[]
   vendors: PricingVendor[]
   group_ratio: Record<string, number>
+  /** Per viewer group ratio overrides, keyed by group then model name. */
+  model_group_ratio?: Record<string, Record<string, number>>
   usable_group: Record<string, { desc: string; ratio: number }>
   supported_endpoint: Record<string, string>
   auto_groups: string[]

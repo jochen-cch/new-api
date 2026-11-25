@@ -115,6 +115,22 @@ function createJsonStringField(
   })
 }
 
+// subject -> model -> ratio, the shape shared by the three model-level
+// override tables; empty input is valid because the editors emit "{}".
+function isNestedRatioMap(parsed: unknown): boolean {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return false
+  }
+  return Object.values(parsed as Record<string, unknown>).every((inner) => {
+    if (typeof inner !== 'object' || inner === null || Array.isArray(inner)) {
+      return false
+    }
+    return Object.values(inner as Record<string, unknown>).every(
+      (ratio) => typeof ratio === 'number' && Number.isFinite(ratio)
+    )
+  })
+}
+
 const createModelSchema = (t: Translate) =>
   z.object({
     ModelPrice: createJsonStringField(t),
@@ -137,6 +153,18 @@ const createGroupSchema = (t: Translate) =>
     TopupGroupRatio: createJsonStringField(t),
     UserUsableGroups: createJsonStringField(t),
     GroupGroupRatio: createJsonStringField(t),
+    UserModelRatio: createJsonStringField(t, {
+      predicate: isNestedRatioMap,
+      predicateMessage: 'Expected a JSON map of user ID → model → ratio',
+    }),
+    UserGroupModelRatio: createJsonStringField(t, {
+      predicate: isNestedRatioMap,
+      predicateMessage: 'Expected a JSON map of user group → model → ratio',
+    }),
+    GroupModelRatio: createJsonStringField(t, {
+      predicate: isNestedRatioMap,
+      predicateMessage: 'Expected a JSON map of billing group → model → ratio',
+    }),
     AutoGroups: createJsonStringField(t, {
       predicate: (parsed) =>
         Array.isArray(parsed) &&
@@ -248,6 +276,9 @@ export function RatioSettingsCard({
     TopupGroupRatio: normalizeJsonString(groupDefaults.TopupGroupRatio),
     UserUsableGroups: normalizeJsonString(groupDefaults.UserUsableGroups),
     GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
+    UserModelRatio: normalizeJsonString(groupDefaults.UserModelRatio),
+    UserGroupModelRatio: normalizeJsonString(groupDefaults.UserGroupModelRatio),
+    GroupModelRatio: normalizeJsonString(groupDefaults.GroupModelRatio),
     AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
     MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
     DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
@@ -288,6 +319,11 @@ export function RatioSettingsCard({
       TopupGroupRatio: formatJsonForTextarea(groupDefaults.TopupGroupRatio),
       UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
+      UserModelRatio: formatJsonForTextarea(groupDefaults.UserModelRatio),
+      UserGroupModelRatio: formatJsonForTextarea(
+        groupDefaults.UserGroupModelRatio
+      ),
+      GroupModelRatio: formatJsonForTextarea(groupDefaults.GroupModelRatio),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
@@ -338,6 +374,11 @@ export function RatioSettingsCard({
       TopupGroupRatio: normalizeJsonString(groupDefaults.TopupGroupRatio),
       UserUsableGroups: normalizeJsonString(groupDefaults.UserUsableGroups),
       GroupGroupRatio: normalizeJsonString(groupDefaults.GroupGroupRatio),
+      UserModelRatio: normalizeJsonString(groupDefaults.UserModelRatio),
+      UserGroupModelRatio: normalizeJsonString(
+        groupDefaults.UserGroupModelRatio
+      ),
+      GroupModelRatio: normalizeJsonString(groupDefaults.GroupModelRatio),
       AutoGroups: normalizeJsonString(groupDefaults.AutoGroups),
       MaxTokenAutoGroups: groupDefaults.MaxTokenAutoGroups,
       DefaultUseAutoGroup: groupDefaults.DefaultUseAutoGroup,
@@ -352,12 +393,22 @@ export function RatioSettingsCard({
       TopupGroupRatio: formatJsonForTextarea(groupDefaults.TopupGroupRatio),
       UserUsableGroups: formatJsonForTextarea(groupDefaults.UserUsableGroups),
       GroupGroupRatio: formatJsonForTextarea(groupDefaults.GroupGroupRatio),
+      UserModelRatio: formatJsonForTextarea(groupDefaults.UserModelRatio),
+      UserGroupModelRatio: formatJsonForTextarea(
+        groupDefaults.UserGroupModelRatio
+      ),
+      GroupModelRatio: formatJsonForTextarea(groupDefaults.GroupModelRatio),
       AutoGroups: formatJsonForTextarea(groupDefaults.AutoGroups),
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
     })
   }, [groupDefaults, groupForm])
+
+  const groupModelOptions = useMemo(
+    () => (pricingQuery.data?.entries ?? []).map((entry) => entry.model_name),
+    [pricingQuery.data]
+  )
 
   const saveModelRatios = useCallback(
     async (values: ModelFormValues) => {
@@ -416,6 +467,9 @@ export function RatioSettingsCard({
         TopupGroupRatio: normalizeJsonString(values.TopupGroupRatio),
         UserUsableGroups: normalizeJsonString(values.UserUsableGroups),
         GroupGroupRatio: normalizeJsonString(values.GroupGroupRatio),
+        UserModelRatio: normalizeJsonString(values.UserModelRatio),
+        UserGroupModelRatio: normalizeJsonString(values.UserGroupModelRatio),
+        GroupModelRatio: normalizeJsonString(values.GroupModelRatio),
         AutoGroups: normalizeJsonString(values.AutoGroups),
         MaxTokenAutoGroups: values.MaxTokenAutoGroups,
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
@@ -424,10 +478,14 @@ export function RatioSettingsCard({
         ),
       }
 
-      // Map form field names to API keys (most are 1:1, except GroupSpecialUsableGroup)
+      // Map form field names to API keys; most are 1:1, the group_ratio_setting
+      // tables need explicit mapping because their option keys are dotted.
       const apiKeyMap: Record<string, string> = {
         GroupSpecialUsableGroup:
           'group_ratio_setting.group_special_usable_group',
+        UserModelRatio: 'group_ratio_setting.user_model_ratio',
+        UserGroupModelRatio: 'group_ratio_setting.user_group_model_ratio',
+        GroupModelRatio: 'group_ratio_setting.group_model_ratio',
       }
 
       const updates = (
@@ -516,6 +574,7 @@ export function RatioSettingsCard({
           form={groupForm}
           onSave={saveGroupRatios}
           isSaving={updateOption.isPending}
+          modelOptions={groupModelOptions}
         />
       )
     }

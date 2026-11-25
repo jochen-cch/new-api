@@ -33,13 +33,10 @@ func modelPriceNotConfiguredError(c *gin.Context, modelName string, userId int) 
 	return errors.New(i18n.T(c, key, map[string]any{"Model": modelName}))
 }
 
-// HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
+// HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present.
+// It must run after RelayInfo.BillingModelName is normalized, because the model level
+// ratio overrides are keyed by the billing model name the price lookup uses.
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hosttypes.GroupRatioInfo {
-	groupRatioInfo := hosttypes.GroupRatioInfo{
-		GroupRatio:        1.0, // default ratio
-		GroupSpecialRatio: -1,
-	}
-
 	// check auto group
 	autoGroup, exists := ctx.Get("auto_group")
 	if exists {
@@ -47,19 +44,12 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
-	// check user group special ratio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
-		// user group special ratio
-		groupRatioInfo.GroupSpecialRatio = userGroupRatio
-		groupRatioInfo.GroupRatio = userGroupRatio
-		groupRatioInfo.HasSpecialRatio = true
-	} else {
-		// normal group ratio
-		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
-	}
-
-	return groupRatioInfo
+	return ratio_setting.ResolveGroupRatio(ratio_setting.GroupRatioInput{
+		UserId:     relayInfo.UserId,
+		UserGroup:  relayInfo.UserGroup,
+		UsingGroup: relayInfo.UsingGroup,
+		Model:      relayInfo.GetBillingModelName(),
+	})
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {

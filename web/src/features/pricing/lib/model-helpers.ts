@@ -51,6 +51,45 @@ export function getConfiguredGroupRatio(
 }
 
 /**
+ * Read the group ratio the backend resolved for this viewer and model.
+ *
+ * The map only contains entries that differ from the plain group ratio, so an
+ * exact model name wins over the "*" wildcard and a missing entry means the
+ * configured group ratio still applies.
+ */
+export function getModelGroupRatio(
+  modelGroupRatio: Record<string, Record<string, number>> | undefined,
+  group: string,
+  modelName: string
+): number | undefined {
+  const ratios = modelGroupRatio?.[group]
+  if (!ratios) return undefined
+  for (const key of [modelName, '*']) {
+    const ratio = ratios[key]
+    if (typeof ratio === 'number' && Number.isFinite(ratio)) return ratio
+  }
+  return undefined
+}
+
+/**
+ * Effective group ratio of one model in one group: the resolved override when
+ * there is one, otherwise the configured group ratio.
+ */
+export function getModelEffectiveGroupRatio(
+  model: PricingModel,
+  group: string,
+  groupRatio: Record<string, number>
+): number {
+  const override = getModelGroupRatio(
+    model.model_group_ratio,
+    group,
+    model.model_name
+  )
+  if (override !== undefined) return override
+  return getConfiguredGroupRatio(groupRatio, group)
+}
+
+/**
  * Resolve the group ratio used by model square summary prices.
  *
  * When no specific group is selected, the model square shows the best price
@@ -71,7 +110,7 @@ export function getDisplayGroupRatio(
     selectedGroup !== FILTER_ALL &&
     modelEnableGroups.includes(selectedGroup)
   ) {
-    return getConfiguredGroupRatio(groupRatio, selectedGroup)
+    return getModelEffectiveGroupRatio(model, selectedGroup, groupRatio)
   }
 
   if (modelEnableGroups.length === 0) {
@@ -81,7 +120,9 @@ export function getDisplayGroupRatio(
   let minRatio = Number.POSITIVE_INFINITY
 
   for (const group of modelEnableGroups) {
-    const ratio = groupRatio[group]
+    const ratio =
+      getModelGroupRatio(model.model_group_ratio, group, model.model_name) ??
+      groupRatio[group]
     if (
       typeof ratio === 'number' &&
       Number.isFinite(ratio) &&

@@ -125,10 +125,42 @@ func GetGroupsEnabledModels(groups []string) []string {
 // GetUserGroupRatio 获取用户使用某个分组的倍率
 // userGroup 用户分组
 // group 需要获取倍率的分组
+// 注意：这里只有分组维度的倍率，不包含模型级覆盖；需要模型覆盖时用 GetRequesterModelGroupRatio。
 func GetUserGroupRatio(userGroup, group string) float64 {
 	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
 	if ok {
 		return ratio
 	}
 	return ratio_setting.GetGroupRatio(group)
+}
+
+// GetRequesterModelGroupRatio 返回请求者身份下 group -> model -> 有效分组倍率，
+// 与计费使用同一套 ResolveGroupRatio 优先级，因此通配 "*" 的跨级覆盖语义保持一致。
+// 只输出与分组基础倍率不同的条目，且只包含请求者自己命中的规则，避免泄露其他客户的折扣。
+func GetRequesterModelGroupRatio(userId int, userGroup string, usableGroup map[string]string) map[string]map[string]float64 {
+	result := make(map[string]map[string]float64)
+	for group := range usableGroup {
+		models := ratio_setting.CollectModelRatioKeys(userId, userGroup, group)
+		if len(models) == 0 {
+			continue
+		}
+		baseRatio := GetUserGroupRatio(userGroup, group)
+		modelRatio := make(map[string]float64, len(models))
+		for _, model := range models {
+			ratio := ratio_setting.ResolveGroupRatio(ratio_setting.GroupRatioInput{
+				UserId:     userId,
+				UserGroup:  userGroup,
+				UsingGroup: group,
+				Model:      model,
+			})
+			if ratio.GroupRatio == baseRatio {
+				continue
+			}
+			modelRatio[model] = ratio.GroupRatio
+		}
+		if len(modelRatio) > 0 {
+			result[group] = modelRatio
+		}
+	}
+	return result
 }

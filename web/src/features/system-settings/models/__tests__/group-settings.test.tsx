@@ -39,6 +39,9 @@ const defaults = {
   TopupGroupRatio: '{"vip":1.2}',
   UserUsableGroups: '{"default":"Standard access","vip":"Premium access"}',
   GroupGroupRatio: '{}',
+  UserModelRatio: '{}',
+  UserGroupModelRatio: '{}',
+  GroupModelRatio: '{}',
   AutoGroups: '["default","vip"]',
   MaxTokenAutoGroups: 5,
   DefaultUseAutoGroup: false,
@@ -50,6 +53,9 @@ const schema = z.object({
   TopupGroupRatio: z.string(),
   UserUsableGroups: z.string(),
   GroupGroupRatio: z.string(),
+  UserModelRatio: z.string(),
+  UserGroupModelRatio: z.string(),
+  GroupModelRatio: z.string(),
   AutoGroups: z.string(),
   MaxTokenAutoGroups: positiveIntegerSchema('Enter a positive integer'),
   DefaultUseAutoGroup: z.boolean(),
@@ -60,6 +66,7 @@ function Fixture(props: {
   onSave?: (values: typeof defaults) => Promise<void>
   initial?: Partial<typeof defaults>
   isSaving?: boolean
+  modelOptions?: string[]
 }) {
   const [actions, setActions] = useState<HTMLDivElement | null>(null)
   const form = useForm({
@@ -73,6 +80,7 @@ function Fixture(props: {
         form={form}
         onSave={props.onSave ?? (async () => {})}
         isSaving={props.isSaving ?? false}
+        modelOptions={props.modelOptions}
       />
     </SettingsPageProvider>
   )
@@ -128,7 +136,9 @@ describe('group settings workspace', () => {
         .map((input) => input.value)
     ).toEqual(['group_2', 'group_1', 'default', 'vip'])
 
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     const saved = onSave.mock.calls[0][0]
     expect(JSON.parse(saved.GroupRatio)).toEqual({
@@ -201,7 +211,9 @@ describe('group settings workspace', () => {
     expect(screen.getByRole('button', { name: 'Move vip up' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Move vip down' })).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(onSave.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -244,7 +256,9 @@ describe('group settings workspace', () => {
     )
     expect(screen.getByText('Not in pricing table')).toBeVisible()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(JSON.parse(onSave.mock.calls[0][0].AutoGroups)).toEqual([
       'vip',
@@ -286,7 +300,9 @@ describe('group settings workspace', () => {
       { target: { value: '0' } }
     )
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() =>
       expect(
         screen.getByRole('tab', { name: 'Auto group order' })
@@ -341,5 +357,68 @@ describe('group settings workspace', () => {
     expect(
       screen.getAllByRole('textbox', { name: 'Group description' })[1]
     ).toHaveValue('Updated description')
+  })
+
+  it('parses stored model ratios and saves the edited value', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(
+      <Fixture
+        onSave={onSave}
+        initial={{
+          UserModelRatio: '{"7":{"gpt-4":0.1,"free-model":0,"broken":-1}}',
+        }}
+      />
+    )
+    await user.click(screen.getByRole('tab', { name: 'Model ratios' }))
+    expect(screen.getByRole('button', { name: 'Rules for 7' })).toBeVisible()
+    // The negative ratio is unusable, so it never becomes an editable row.
+    expect(
+      screen.getAllByRole('combobox', { name: 'Model name' })
+    ).toHaveLength(2)
+    const ratio = screen.getAllByRole('textbox', { name: 'Group ratio' })[0]
+    await user.clear(ratio)
+    await user.type(ratio, '0.15')
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(JSON.parse(onSave.mock.calls[0][0].UserModelRatio)).toEqual({
+      '7': { 'gpt-4': 0.15, 'free-model': 0 },
+    })
+  })
+
+  it('adds a wildcard billing group rule and keeps it after a JSON round trip', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} modelOptions={['gpt-4', 'gpt-4o']} />)
+    await user.click(screen.getByRole('tab', { name: 'Model ratios' }))
+    await user.type(
+      screen.getByRole('combobox', { name: 'Select or type a billing group' }),
+      'vip'
+    )
+    await user.click(screen.getByRole('button', { name: 'Add billing group' }))
+    await user.type(screen.getByRole('combobox', { name: 'Model name' }), '*')
+    await user.type(screen.getByRole('textbox', { name: 'Group ratio' }), '0.5')
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(JSON.parse(onSave.mock.calls[0][0].GroupModelRatio)).toEqual({
+      vip: { '*': 0.5 },
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Switch to JSON' }))
+    await user.click(screen.getByRole('button', { name: 'Switch to Visual' }))
+    expect(onSave.mock.calls[0][0].GroupModelRatio).toBe(
+      '{\n  "vip": {\n    "*": 0.5\n  }\n}'
+    )
+    expect(screen.getByRole('button', { name: 'Rules for vip' })).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model name' })).toHaveValue(
+      '*'
+    )
+    expect(screen.getByRole('textbox', { name: 'Group ratio' })).toHaveValue(
+      '0.5'
+    )
   })
 })

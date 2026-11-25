@@ -166,6 +166,20 @@ export function safeJsonParseWithValidation<T>(
   return parsed
 }
 
+/**
+ * Parse a `subject -> key -> ratio` configuration map, e.g. group ratios or the
+ * model-level group ratio override tables. Invalid input yields an empty map.
+ */
+export function parseNestedRatioMap(
+  value: string | undefined | null
+): Record<string, Record<string, number>> {
+  const parsed = safeJsonParse<Record<string, Record<string, number>>>(value, {
+    fallback: {},
+    silent: true,
+  })
+  return parsed && typeof parsed === 'object' ? parsed : {}
+}
+
 export function tryJsonParse<T = unknown>(
   value: string | undefined | null
 ): JsonParseResult<T> {

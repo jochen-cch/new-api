@@ -282,6 +282,12 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	switch key {
+	case "group_ratio_setting.user_model_ratio":
+		return ratio_setting.CheckModelRatioMap(value, true)
+	case "group_ratio_setting.user_group_model_ratio", "group_ratio_setting.group_model_ratio":
+		return ratio_setting.CheckModelRatioMap(value, false)
+	}
 	return nil
 }
 
@@ -744,7 +750,8 @@ func handleConfigUpdate(key, value string) bool {
 	// 特定配置的后处理
 	if configName == "performance_setting" {
 		performance_setting.UpdateAndSync()
-	} else if configName == "billing_setting" {
+	} else if configName == "billing_setting" || configName == "group_ratio_setting" {
+		// 模型级分组倍率覆盖会改变定价页展示的倍率，需要同时失效定价缓存和倍率暴露缓存。
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
 	}
